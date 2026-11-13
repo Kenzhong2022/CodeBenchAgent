@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from dotenv import load_dotenv
 
-from routers import auth, crud, problems, submissions
+from routers import auth, crud, problems, submissions, users
 
 load_dotenv()
 app = FastAPI(title="CodeBenchAgent", version="0.1.0")
@@ -12,6 +12,7 @@ app.include_router(problems.router)
 app.include_router(submissions.router)
 app.include_router(crud.router)
 app.include_router(auth.router)
+app.include_router(users.router)
 
 
 # ========== 基础接口 ==========
