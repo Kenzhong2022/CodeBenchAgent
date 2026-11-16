@@ -1,11 +1,20 @@
 from datetime import datetime, timezone
+import os
 import re
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request, Response
 from postgrest.exceptions import APIError
 
 from db import supabase
-from security import generate_verification_code, hash_password, verify_password
+from security import (
+    SESSION_COOKIE,
+    SESSION_TTL_SECONDS,
+    create_session_token,
+    decode_session_token,
+    generate_verification_code,
+    hash_password,
+    verify_password,
+)
 import redis_client as redis
 import mailer
 
@@ -121,7 +130,7 @@ def register(payload: dict = Body(...)):
 
 
 @router.post("/login")
-def login(payload: dict = Body(...)):
+def login(payload: dict = Body(...), response: Response = None):
     email = payload.get("email")
     password = payload.get("password")
 
@@ -150,7 +159,44 @@ def login(payload: dict = Body(...)):
         "id", account["id"]
     ).execute()
 
+    # 签发会话 JWT 写入 HttpOnly Cookie：后续 /api/auth/me 与
+    # /api/submissions?mine=true 均以该 Cookie 鉴权（前端脚本不可读）
+    token = create_session_token(account)
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="lax",
+        path="/",
+        secure=os.getenv("COOKIE_SECURE", "").lower() == "true",
+    )
+
     return {
         "ok": True,
         "user": {"id": account["id"], "email": account["email"], "name": account["name"]},
     }
+
+
+@router.get("/me")
+def me(request: Request):
+    """读取会话 Cookie 返回当前登录用户；未登录 / 过期返回 401。"""
+    token = request.cookies.get(SESSION_COOKIE)
+    payload = decode_session_token(token) if token else None
+    if not payload:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    return {
+        "ok": True,
+        "user": {
+            "id": payload["sub"],
+            "email": payload.get("email"),
+            "name": payload.get("name"),
+        },
+    }
+
+
+@router.post("/logout")
+def logout(response: Response):
+    """退出登录：清除会话 Cookie（JWT 无状态，无需服务端撤销）。"""
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}

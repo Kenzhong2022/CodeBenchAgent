@@ -1,9 +1,10 @@
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
 from postgrest.exceptions import APIError
 
 from db import supabase
+from security import SESSION_COOKIE, decode_session_token
 
 router = APIRouter(prefix="/api/submissions", tags=["提交记录"])
 
@@ -62,9 +63,18 @@ def sanitize_submission(body: Optional[dict]) -> tuple[Optional[dict], Optional[
 
 
 @router.get("")
-def list_submissions():
+def list_submissions(request: Request, mine: bool = False):
+    """提交记录列表；mine=true 时按会话 Cookie 只返回当前登录用户的提交，
+    未登录 / Cookie 无效返回 401（前端据此把统计显示为 0）。"""
+    query = supabase.table("submissions").select("*")
+    if mine:
+        token = request.cookies.get(SESSION_COOKIE)
+        payload = decode_session_token(token) if token else None
+        if not payload:
+            raise HTTPException(status_code=401, detail="未登录或登录已过期")
+        query = query.eq("account_id", payload["sub"])
     try:
-        res = supabase.table("submissions").select("*").order("created_at", desc=False).execute()
+        res = query.order("created_at", desc=False).execute()
     except APIError as e:
         raise HTTPException(status_code=500, detail=str(e))
     return res.data
